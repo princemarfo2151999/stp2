@@ -48,7 +48,7 @@ export function Sidebar() {
   const pathname = usePathname()
   const [collapsed, setCollapsed] = useState(false)
   const [mobileOpen, setMobileOpen] = useState(false)
-  const { user, roleName, organizationName, navigationItems } = useRBAC()
+  const { user, roleName, organizationName, navigationItems, signOut } = useRBAC()
 
   // Build initials from user name
   const initials = `${user.firstName.charAt(0)}${user.lastName.charAt(0)}`
@@ -160,6 +160,7 @@ export function Sidebar() {
           {/* Sign out */}
           <div className="px-2 py-4 border-t border-sidebar-border">
             <button
+              onClick={() => signOut()}
               className={cn(
                 "flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium text-sidebar-foreground/70 hover:text-sidebar-foreground hover:bg-sidebar-accent/50 w-full transition-colors",
                 collapsed && "justify-center px-2"

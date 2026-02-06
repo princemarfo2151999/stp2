@@ -1,9 +1,9 @@
 "use client"
 
-import { useState, useEffect } from "react"
+import { useState } from "react"
 import dynamic from "next/dynamic"
 import { KPICard } from "@/components/dashboard/kpi-card"
-import { MapPin, Zap, CheckCircle, AlertTriangle, Plus, Search, Filter, Map, Table } from "lucide-react"
+import { MapPin, Zap, CheckCircle, AlertTriangle, Plus, Search, Filter, Map, Table, Loader2 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import {
@@ -15,7 +15,7 @@ import {
 } from "@/components/ui/select"
 import { StationsTable } from "@/components/stations/stations-table"
 import { AddStationDialog } from "@/components/stations/add-station-dialog"
-import type { StationWithConnectors } from "@/lib/api/stations"
+import { useStations } from "@/hooks/use-stations"
 
 // Dynamic import to avoid SSR issues with Leaflet
 const StationMap = dynamic(
@@ -24,58 +24,56 @@ const StationMap = dynamic(
 )
 
 export default function StationsPage() {
-  const [stations, setStations] = useState<StationWithConnectors[]>([])
-  const [loading, setLoading] = useState(true)
+  const { stations, isLoading } = useStations()
   const [searchQuery, setSearchQuery] = useState("")
   const [statusFilter, setStatusFilter] = useState<string>("all")
   const [cityFilter, setCityFilter] = useState<string>("all")
   const [isAddDialogOpen, setIsAddDialogOpen] = useState(false)
   const [view, setView] = useState<"table" | "map">("table")
 
-  // Fetch stations from API
-  useEffect(() => {
-    const fetchStations = async () => {
-      try {
-        const response = await fetch('/api/stations')
-        if (response.ok) {
-          const data = await response.json()
-          setStations(data)
-        }
-      } catch (error) {
-        console.error('Failed to fetch stations:', error)
-      } finally {
-        setLoading(false)
-      }
-    }
-
-    fetchStations()
-  }, [])
-
   // Calculate KPIs
   const totalStations = stations.length
-  const activeStations = stations.filter((s) => s.status === "online").length
-  const totalConnectors = stations.reduce((sum, s) => sum + s.connectors.length, 0)
+  const activeStations = stations.filter((s) => s.status === "active" || s.status === "online").length
+  const totalConnectors = stations.reduce((sum, s) => sum + (s.connectors?.length || 0), 0)
   const availableConnectors = stations.reduce(
-    (sum, s) => sum + s.connectors.filter(c => c.status === 'available').length,
+    (sum, s) => sum + (s.connectors?.filter(c => c.status === 'available').length || 0),
     0
   )
 
   // Get unique cities for filter
-  const cities = [...new Set(stations.map((s) => s.city))]
+  const cities = [...new Set(stations.map((s) => s.city).filter(Boolean))] as string[]
 
   // Filter stations
   const filteredStations = stations.filter((station) => {
     const matchesSearch =
       station.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      station.city.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      station.address.toLowerCase().includes(searchQuery.toLowerCase())
+      (station.city || "").toLowerCase().includes(searchQuery.toLowerCase()) ||
+      (station.address || "").toLowerCase().includes(searchQuery.toLowerCase())
     const matchesStatus = statusFilter === "all" || station.status === statusFilter
     const matchesCity = cityFilter === "all" || station.city === cityFilter
     return matchesSearch && matchesStatus && matchesCity
   })
 
-  if (loading) {
-    return <div className="flex items-center justify-center h-96">Loading stations...</div>
+  // Convert to map format
+  const mapStations = filteredStations
+    .filter((s) => s.latitude != null && s.longitude != null)
+    .map((s) => ({
+      id: s.id,
+      name: s.name,
+      address: s.address || "",
+      city: s.city || "",
+      latitude: s.latitude!,
+      longitude: s.longitude!,
+      status: s.status as "online" | "offline" | "maintenance" | "coming_soon",
+      connectors: s.connectors || [],
+    }))
+
+  if (isLoading) {
+    return (
+      <div className="flex items-center justify-center h-96">
+        <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+      </div>
+    )
   }
 
   return (
@@ -115,7 +113,7 @@ export default function StationsPage() {
           title="Available Now"
           value={availableConnectors}
           icon={AlertTriangle}
-          description={`${Math.round((availableConnectors / totalConnectors) * 100)}% availability`}
+          description={totalConnectors > 0 ? `${Math.round((availableConnectors / totalConnectors) * 100)}% availability` : "No connectors"}
         />
       </div>
 
@@ -139,7 +137,7 @@ export default function StationsPage() {
             <SelectContent>
               <SelectItem value="all">All Status</SelectItem>
               <SelectItem value="active">Active</SelectItem>
-              <SelectItem value="inactive">Inactive</SelectItem>
+              <SelectItem value="offline">Offline</SelectItem>
               <SelectItem value="maintenance">Maintenance</SelectItem>
             </SelectContent>
           </Select>
@@ -185,7 +183,7 @@ export default function StationsPage() {
         <StationsTable stations={filteredStations as any} />
       ) : (
         <div className="h-[600px]">
-          <StationMap stations={filteredStations} />
+          <StationMap stations={mapStations as any} />
         </div>
       )}
 

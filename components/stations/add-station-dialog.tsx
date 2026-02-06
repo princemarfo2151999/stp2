@@ -1,7 +1,6 @@
 "use client"
 
 import React from "react"
-
 import { useState } from "react"
 import {
   Dialog,
@@ -21,10 +20,10 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
-import { Checkbox } from "@/components/ui/checkbox"
-import { useStationsStore } from "@/lib/stores/stations-store"
-import { amenitiesList, paymentMethodsList, connectorTypes } from "@/lib/data/stations"
-import { Plus, Trash2 } from "lucide-react"
+import { useStations } from "@/hooks/use-stations"
+import { Plus, Trash2, Loader2 } from "lucide-react"
+
+const connectorTypes = ["CCS2", "CHAdeMO", "Type2", "Type1"] as const
 
 interface AddStationDialogProps {
   open: boolean
@@ -37,8 +36,9 @@ interface ConnectorInput {
 }
 
 export function AddStationDialog({ open, onOpenChange }: AddStationDialogProps) {
-  const { addStation } = useStationsStore()
+  const { addStation } = useStations()
   const [isSubmitting, setIsSubmitting] = useState(false)
+  const [error, setError] = useState<string | null>(null)
 
   // Form state
   const [name, setName] = useState("")
@@ -48,9 +48,7 @@ export function AddStationDialog({ open, onOpenChange }: AddStationDialogProps) 
   const [longitude, setLongitude] = useState("")
   const [pricePerKwh, setPricePerKwh] = useState("")
   const [operatingHours, setOperatingHours] = useState("24/7")
-  const [status, setStatus] = useState<"active" | "inactive" | "maintenance">("active")
-  const [selectedAmenities, setSelectedAmenities] = useState<string[]>([])
-  const [selectedPaymentMethods, setSelectedPaymentMethods] = useState<string[]>([])
+  const [status, setStatus] = useState<string>("active")
   const [connectors, setConnectors] = useState<ConnectorInput[]>([
     { type: "CCS2", power: 50 },
   ])
@@ -64,48 +62,33 @@ export function AddStationDialog({ open, onOpenChange }: AddStationDialogProps) 
     setPricePerKwh("")
     setOperatingHours("24/7")
     setStatus("active")
-    setSelectedAmenities([])
-    setSelectedPaymentMethods([])
     setConnectors([{ type: "CCS2", power: 50 }])
+    setError(null)
   }
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
     setIsSubmitting(true)
+    setError(null)
 
     try {
-      // Build EVSE and connectors
-      const evseConnectors = connectors.map((c, index) => ({
-        id: `C${index + 1}`,
-        type: c.type as "CCS2" | "CHAdeMO" | "Type2" | "Type1",
-        power: c.power,
-        status: "available" as const,
-      }))
-
-      addStation({
+      await addStation({
         name,
         address,
         city,
         latitude: parseFloat(latitude),
         longitude: parseFloat(longitude),
-        pricePerKwh: parseFloat(pricePerKwh),
-        operatingHours,
+        price_per_kwh: parseFloat(pricePerKwh) || undefined,
+        operating_hours: operatingHours,
         status,
-        amenities: selectedAmenities,
-        paymentMethods: selectedPaymentMethods,
-        evses: [
-          {
-            id: `EVSE-NEW-A`,
-            evseId: `WATTSC*ENEW*A`,
-            connectors: evseConnectors,
-          },
-        ],
-        totalConnectors: connectors.length,
-        availableConnectors: connectors.length,
-      })
+        connector_types: connectors.map((c) => c.type),
+        power_output_kw: Math.max(...connectors.map((c) => c.power)),
+      } as any)
 
       resetForm()
       onOpenChange(false)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to create station")
     } finally {
       setIsSubmitting(false)
     }
@@ -125,18 +108,6 @@ export function AddStationDialog({ open, onOpenChange }: AddStationDialogProps) 
     setConnectors(updated)
   }
 
-  const toggleAmenity = (amenity: string) => {
-    setSelectedAmenities((prev) =>
-      prev.includes(amenity) ? prev.filter((a) => a !== amenity) : [...prev, amenity]
-    )
-  }
-
-  const togglePaymentMethod = (method: string) => {
-    setSelectedPaymentMethods((prev) =>
-      prev.includes(method) ? prev.filter((m) => m !== method) : [...prev, method]
-    )
-  }
-
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
@@ -148,6 +119,12 @@ export function AddStationDialog({ open, onOpenChange }: AddStationDialogProps) 
         </DialogHeader>
 
         <form onSubmit={handleSubmit} className="space-y-6">
+          {error && (
+            <div className="p-3 text-sm text-destructive bg-destructive/10 border border-destructive/20 rounded-lg">
+              {error}
+            </div>
+          )}
+
           {/* Basic Information */}
           <div className="space-y-4">
             <h3 className="text-sm font-medium text-foreground">Basic Information</h3>
@@ -216,7 +193,7 @@ export function AddStationDialog({ open, onOpenChange }: AddStationDialogProps) 
             <h3 className="text-sm font-medium text-foreground">Pricing & Operations</h3>
             <div className="grid gap-4 sm:grid-cols-3">
               <div className="space-y-2">
-                <Label htmlFor="price">Price per kWh (MAD) *</Label>
+                <Label htmlFor="price">Price per kWh (MAD)</Label>
                 <Input
                   id="price"
                   type="number"
@@ -224,7 +201,6 @@ export function AddStationDialog({ open, onOpenChange }: AddStationDialogProps) 
                   value={pricePerKwh}
                   onChange={(e) => setPricePerKwh(e.target.value)}
                   placeholder="e.g., 5.00"
-                  required
                 />
               </div>
               <div className="space-y-2">
@@ -238,13 +214,13 @@ export function AddStationDialog({ open, onOpenChange }: AddStationDialogProps) 
               </div>
               <div className="space-y-2">
                 <Label htmlFor="status">Status</Label>
-                <Select value={status} onValueChange={(v) => setStatus(v as typeof status)}>
+                <Select value={status} onValueChange={setStatus}>
                   <SelectTrigger id="status">
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
                     <SelectItem value="active">Active</SelectItem>
-                    <SelectItem value="inactive">Inactive</SelectItem>
+                    <SelectItem value="offline">Offline</SelectItem>
                     <SelectItem value="maintenance">Maintenance</SelectItem>
                   </SelectContent>
                 </Select>
@@ -303,50 +279,19 @@ export function AddStationDialog({ open, onOpenChange }: AddStationDialogProps) 
             </div>
           </div>
 
-          {/* Amenities */}
-          <div className="space-y-4">
-            <h3 className="text-sm font-medium text-foreground">Amenities</h3>
-            <div className="flex flex-wrap gap-3">
-              {amenitiesList.map((amenity) => (
-                <label
-                  key={amenity}
-                  className="flex items-center gap-2 cursor-pointer"
-                >
-                  <Checkbox
-                    checked={selectedAmenities.includes(amenity)}
-                    onCheckedChange={() => toggleAmenity(amenity)}
-                  />
-                  <span className="text-sm text-foreground">{amenity}</span>
-                </label>
-              ))}
-            </div>
-          </div>
-
-          {/* Payment Methods */}
-          <div className="space-y-4">
-            <h3 className="text-sm font-medium text-foreground">Payment Methods</h3>
-            <div className="flex flex-wrap gap-3">
-              {paymentMethodsList.map((method) => (
-                <label
-                  key={method}
-                  className="flex items-center gap-2 cursor-pointer"
-                >
-                  <Checkbox
-                    checked={selectedPaymentMethods.includes(method)}
-                    onCheckedChange={() => togglePaymentMethod(method)}
-                  />
-                  <span className="text-sm text-foreground">{method}</span>
-                </label>
-              ))}
-            </div>
-          </div>
-
           <DialogFooter>
             <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
               Cancel
             </Button>
             <Button type="submit" disabled={isSubmitting}>
-              {isSubmitting ? "Creating..." : "Create Station"}
+              {isSubmitting ? (
+                <>
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  Creating...
+                </>
+              ) : (
+                "Create Station"
+              )}
             </Button>
           </DialogFooter>
         </form>

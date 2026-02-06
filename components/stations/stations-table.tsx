@@ -20,8 +20,7 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog"
 import { cn } from "@/lib/utils"
-import { type Station } from "@/lib/data/stations"
-import { useStationsStore } from "@/lib/stores/stations-store"
+import { useStations, type Station } from "@/hooks/use-stations"
 import { MoreHorizontal, Edit, Trash2, Eye, MapPin, Zap } from "lucide-react"
 import { EditStationDialog } from "./edit-station-dialog"
 import { StationDetailSheet } from "./station-detail-sheet"
