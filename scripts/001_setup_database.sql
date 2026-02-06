@@ -1,5 +1,15 @@
+-- Drop existing tables to start fresh
+DROP TABLE IF EXISTS public.settings CASCADE;
+DROP TABLE IF EXISTS public.connectors CASCADE;
+DROP TABLE IF EXISTS public.stations CASCADE;
+DROP TABLE IF EXISTS public.profiles CASCADE;
+
+-- Drop existing trigger
+DROP TRIGGER IF EXISTS on_auth_user_created ON auth.users;
+DROP FUNCTION IF EXISTS public.handle_new_user();
+
 -- Create profiles table with role-based access
-CREATE TABLE IF NOT EXISTS public.profiles (
+CREATE TABLE public.profiles (
   id UUID PRIMARY KEY REFERENCES auth.users(id) ON DELETE CASCADE,
   first_name TEXT,
   last_name TEXT,
@@ -16,7 +26,6 @@ CREATE POLICY "profiles_select_own" ON public.profiles FOR SELECT USING (auth.ui
 CREATE POLICY "profiles_insert_own" ON public.profiles FOR INSERT WITH CHECK (auth.uid() = id);
 CREATE POLICY "profiles_update_own" ON public.profiles FOR UPDATE USING (auth.uid() = id);
 CREATE POLICY "profiles_delete_own" ON public.profiles FOR DELETE USING (auth.uid() = id);
--- Allow platform admins to see all profiles
 CREATE POLICY "profiles_admin_select" ON public.profiles FOR SELECT
   USING (
     EXISTS (
@@ -50,14 +59,13 @@ BEGIN
 END;
 $$;
 
-DROP TRIGGER IF EXISTS on_auth_user_created ON auth.users;
 CREATE TRIGGER on_auth_user_created
   AFTER INSERT ON auth.users
   FOR EACH ROW
   EXECUTE FUNCTION public.handle_new_user();
 
 -- Create stations table
-CREATE TABLE IF NOT EXISTS public.stations (
+CREATE TABLE public.stations (
   id TEXT PRIMARY KEY,
   name TEXT NOT NULL,
   address TEXT NOT NULL,
@@ -90,17 +98,13 @@ CREATE TABLE IF NOT EXISTS public.stations (
 
 ALTER TABLE public.stations ENABLE ROW LEVEL SECURITY;
 
--- Everyone can read public stations
 CREATE POLICY "stations_public_read" ON public.stations FOR SELECT USING (true);
--- Authenticated users can insert
 CREATE POLICY "stations_auth_insert" ON public.stations FOR INSERT WITH CHECK (auth.uid() IS NOT NULL);
--- Authenticated users can update
 CREATE POLICY "stations_auth_update" ON public.stations FOR UPDATE USING (auth.uid() IS NOT NULL);
--- Authenticated users can delete
 CREATE POLICY "stations_auth_delete" ON public.stations FOR DELETE USING (auth.uid() IS NOT NULL);
 
 -- Create connectors table
-CREATE TABLE IF NOT EXISTS public.connectors (
+CREATE TABLE public.connectors (
   id TEXT PRIMARY KEY,
   station_id TEXT NOT NULL REFERENCES public.stations(id) ON DELETE CASCADE,
   connector_number INTEGER NOT NULL,
@@ -120,7 +124,7 @@ CREATE POLICY "connectors_auth_update" ON public.connectors FOR UPDATE USING (au
 CREATE POLICY "connectors_auth_delete" ON public.connectors FOR DELETE USING (auth.uid() IS NOT NULL);
 
 -- Create settings table
-CREATE TABLE IF NOT EXISTS public.settings (
+CREATE TABLE public.settings (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   category TEXT NOT NULL,
   key TEXT NOT NULL,
