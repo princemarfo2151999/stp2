@@ -1,0 +1,469 @@
+
+Thought for 2m ...
+
+Below are the two deliverables you asked for:
+1. a very detailed requirements document for an industrial-grade WATTSC EV SaaS (CPMS + driver app + operator/backoffice/admin + integrations), aligned to your mockups and the missing "tabs not working" pain you reported, and
+2. a very detailed "build prompt" you can paste into builders (ChatGPT-like agents, Vercel, Copilot, Bolt, Emergent, etc.) to force step-by-step, integratable delivery.
+
+I'm explicitly grounding the UI tabs and Hostinger constraints from your uploaded doc.
+WATTSCEVSAASUI	WATTSCEVSAASUI
+
+WATTSCEVSAASUI
+
+
+
+
+A) Industrial-Grade Requirements Document (WATTSC EV CPMS SaaS)
+A1. Product summary
+Product name: WATTSC EV CPMS (SaaS)
+Goal: A multi-tenant, Morocco-first EV charging management platform that supports: Driver experience: find charger, filter, map, reserve, pay, start/stop charging, receipts Operator experience: live operations, approvals, incident handling, refunds CPO/backoffice: stations/EVSE/connector management, tariffs, KPIs, reporting Admin: platform settings, integrations, tenant plans, compliance, audit
+Integrations: payments (Stripe + CMI Morocco), maps (OpenStreetMap/Leaflet), CSMS via CitrineOS (OCPP 2.0.1), OCPI roaming, Plug&Charge, webhooks, notifications
+Critical non-negotiable: no "Coming soon" placeholders in core tabs. In your doc you noted Stations failing
+
+to save and Sessions/Users/Settings showing only "Coming soon". So this spec treats those as hard acceptance criteria.
+
+WATTSCEVSAASUI
+
+
+
+
+A2. Hosting & architecture constraints (Hostinger Cloud Startup)
+Your uploaded doc explicitly states you want Hostinger Cloud Startup compatibility and that Django/Python
+
+isn't supported there, while Node.js apps and MariaDB are supported.
+
+Therefore the "Hostinger-safe" architecture is:
+
+WATTSCEVSAASUI
+
+
+Web UI: Next.js (React)
+API: Node.js (Express or NestJS; spec assumes Express + TypeScript)
+Database on Hostinger: MariaDB (MySQL-compatible)
+Real-time: WebSocket gateway (Node) + Redis (optional)
+CitrineOS CSMS: runs separately (not on Hostinger Cloud Startup), with its own DB (commonly PostgreSQL) and broker/cache as needed
+    Mobile apps: React Native (Expo) or Flutter; spec assumes React Native for shared TypeScript models This ensures Hostinger can host the "product layer" while CitrineOS handles OCPP.
+
+
+A3. Personas & roles (RBAC)
+Tenant model: Multi-tenant SaaS (each CPO = tenant "Organization").
+Roles:
+1. Driver (registered) - can pay, reserve, charge, view history, receipts
+2. Guest driver (QR) - can scan QR, pay, start/stop, get receipt (no account required)
+3. Operator - monitors live sessions, approves starts (when required), handles incidents/refunds
+4. CPO Admin (tenant admin) - manages stations/EVSE/connectors, tariffs, staff users, reports
+5. Platform Admin (WATTSC super-admin) - global settings, tenant billing plans, integrations keys, compliance & audit
+
+RBAC principle: least privilege + explicit permission checks at API level (not UI-only).
+
+
+A4. UI requirements (match your mockups)
+A4.1 Left navigation (Backoffice/Admin shell)
+Must match your screenshots: WATTSC brand top-left, user card (WATTSC Admin), and nav items: Dashboard
+Stations Sessions Users Settings Sign out
+A4.2 Settings tab set (must exist and work)
+Your uploaded doc and mockups require these sub-tabs under Settings: General, Pricing, Notifications,
+
+Integrations, OCPP/CitrineOS, Webhooks. Each tab must:
+
+WATTSCEVSAASUI
+
+load current config (GET) allow edits with validation save changes (PUT/PATCH) show success/failure toast persist to DB (no fake state)
+General (as in mockup):
+Platform Name
+Default Currency (MAD) VAT rate %
+Support email Support phone
+Save Changes button
+Pricing (as in mockup):
+Default price per kWh (MAD) Peak hour start/end
+Peak hour multiplier Dynamic pricing toggle Save Changes
+Notifications (as in mockup): Email notifications toggle SMS notifications toggle Push notifications toggle Session start alert toggle Session end alert toggle Low balance alert toggle Save Changes
+Integrations (as in mockup):
+Stripe section: enable toggle, public key input (secret key stored server-side) CMI Morocco section: enable toggle, Merchant ID input
+Save Changes
+OCPP / CitrineOS:
+CitrineOS base URL
+
+API key / auth method
+Webhook secret/shared secret (for CitrineOS ? product-layer events) Connection test button (calls /health or /openapi ping)
+Mapping rules (chargerId ? station/evse/connector IDs)
+Webhooks:
+Manage outbound webhooks from WATTSC (events list + URL + secret) Retry policy (dead-letter), signature format, delivery logs, manual replay
+
+
+A5. Core domain model (database)
+Hostinger DB = MariaDB. Use migrations (Prisma/TypeORM/Knex).
+Below is the minimum industrial schema (expandable), designed to solve your "Stations won't save / Sessions empty / Users empty" failure mode.
+A5.1 Tenancy & identity
+organizations (tenant)
+
+users
+roles (driver/operator/cpo_admin/platform_admin) user_org_memberships (user belongs to org + role) auth_refresh_tokens (optional)
+A5.2 Charging infrastructure
+sites (location group)
+stations (charge station; visible on map)
+evses (EVSE objects)
+connectors (physical connectors) amenities (lookup table) station_amenities (many-to-many)
+payment_methods (lookup: stripe/cmi/pay_at_station) station_payment_methods (many-to-many) station_images (optional)
+A5.3 Pricing & tariffs
+
+tariffs
+tariff_components (energy/time/parking fees)
+
+tax_rules
+dynamic_pricing_rules_v1 (ruleset + enable flag)
+
+peak_pricing_windows
+
+A5.4 Reservations
+reservations
+station_id / connector_id start_time, end_time
+status (pending/confirmed/cancelled/expired/checked_in) pricing snapshot
+conflict prevention: unique constraint on (connector_id, overlapping time range) implemented via transaction + overlap check
+A5.5 Sessions (charging)
+
+charge_sessions
+connector_id
+driver_user_id nullable (guest allowed)
+auth_mode (subscription / prepaid / operator_override / guest_qr)
+
+session_state (see state machine below) start_ts, stop_ts
+energy_kwh, cost_total, currency ocpp_transaction_id (from CitrineOS/OCPP)
+session_events (timeline audit)
+meter_values (optional for detail)
+
+A5.6 Payments & billing (Stripe + CMI)
+
+payment_intents
+provider (stripe/cmi/cash) amount_authorized amount_captured
+status
+  external_reference (payment intent id / order id) payment_transactions (callbacks, signatures, raw payload hash) invoices + invoice_lines
+refunds
+
+A5.7 Subscriptions (B2B and/or driver plans)
+
+plans
+
+subscriptions
+subscription_entitlements (e.g., "free charging up to X kWh", "discount %", "fleet rules")
+
+A5.8 Ops & support
+support_tickets
+
+incidents
+audit_logs (immutable; who did what)
+
+
+A6. Mission-critical workflows (must be correct)
+A6.1 Station creation & map visibility (fix "always failed to save station") Backoffice ? Stations ? Add Station
+Validate required fields (name, coordinates, address, at least 1 EVSE/connector) Save station + EVSE + connectors in a single DB transaction
+After commit:
+emit event station.created
+    rebuild "map cache" (or query direct) so station appears immediately UI must show created station in stations list and on map
+Acceptance criteria
+Create station ? refresh page ? station remains Station appears in search and map markers
+A6.2 Driver discovery (charger locator)
+Driver can filter by:
+connector type / power / speed radius
+amenities payment method
+real-time availability
+Return list + map markers with: current connector status
+price estimate
+
+distance + ETA station detail panel
+A6.3 Reservation with time allocation (multi-reservations with correct intervals)
+Driver selects station/connector and desired duration/time window System checks:
+connector availability now and during reserved window conflicts (no overlapping reservations on same connector)
+Confirm reservation (hold) with expiry (e.g., 10 minutes to arrive) Operator sees upcoming reservations timeline per station
+A6.4 "Connected-before-charge" gating + approvals
+You required: charging can start only if:
+charger/connector is connected/ready (OCPP status / EVSE state), AND payment is authorized OR subscription active, OR operator allows override
+Implementation rule
+"Start Charging" button is disabled until:
+connector status ? {Preparing, Occupied (plug detected), Available but with plug confirmation event} depending on OCPP signals you get
+Operator console receives a popup when:
+plug detected OR driver requested start on a connector
+Driver also sees status popup ("Cable detected. Waiting for payment/approval.")
+
+A6.5 Payment options logic (as you requested)
+At station/connector detail:
+if station supports CMI ? show CMI button else if supports Stripe ? show Stripe button else show "Pay at station"
+(Stored in station_payment_methods .)
+
+A6.6 Session lifecycle (state machine) States (minimum):
+1. initiated (driver chose connector)
+2. awaiting_payment (needs preauth/capture)
+3. authorized (payment ok OR subscription ok)
+4. awaiting_plug (payment ok; waiting for cable)
+5. awaiting_operator (needs manual approval)
+6. starting (sending RemoteStart to CitrineOS)
+7. charging (active)
+8. stopping (RemoteStop)
+9. completed (final meter/amount)
+10. captured (payment captured/settled)
+11. failed (with reason)
+12. refunded (if applicable)
+Hard requirement: every transition writes session_events + audit_logs .
+
+A6.7 CitrineOS / OCPP integration boundary Rule of truth
+CitrineOS is truth for: charger connectivity EVSE/connector status transaction ids
+
+meter values/events
+WATTSC product layer is truth for: users/roles/subscriptions pricing/tariffs/business rules payments/invoices/refunds reservations and customer UX
+Integration methods
+REST calls from WATTSC ? CitrineOS:
+remote start/stop (by chargerId/evseId/connectorId mapping) query status / sessions
+Webhooks/events from CitrineOS ? WATTSC: status notifications
+transaction start/stop
+meter updates (optional sampling)
+
+A6.8 OCPI roaming (Milestone feature but must be scaffolded now)
+Deliverable now:
+OCPI module boundaries + DB tables + endpoint skeletons + auth/token approach Locations/tariffs/sessions/CDRs mapping design
+Not required to integrate to a hub on day 1, but code must be structured so you can.
+
+A6.9 Plug & Charge (PnC) (Milestone feature, scaffold now)
+Deliverable now:
+data model to store contract certificates/identities (secured) API stubs and feature flags
+OCPP 2.0.1 alignment notes in code comments + integration placeholders (Real ISO 15118 handling is later; scaffold now without breaking architecture.)
+A6.10 Dynamic pricing v1
+Deliverable now:
+pricing engine that can compute a quote: base price/kWh
+peak multiplier windows
+optional demand multiplier (toggle)
+store quote snapshot at reservation/session start (so invoices are consistent even if pricing changes later)
+
+
+A7. Non-functional requirements (industrial grade)
+Reliability
+Idempotency for payments and webhooks (dedupe keys) Retry policies for external calls (CitrineOS, payment gateways) Dead-letter queue/log for failed webhooks
+Security
+JWT access tokens + refresh tokens (optional) Password hashing (argon2/bcrypt)
+Secrets in env vars (never in frontend) Webhook signatures (HMAC SHA256)
+Strict tenant isolation (org_id enforcement in every query)
+Observability
+Structured logs (request id / correlation id) Health checks: /health, /ready
+
+Basic metrics (latency, error rate, queue length)
+Audit trails for sensitive actions (pricing changes, refunds, station edits)
+Performance
+Map search must be fast:
+use bounding box queries + index on lat/lng optionally cache station status
+Data
+Backups daily
+Migration strategy (versioned)
+
+
+A8. "No broken tabs" acceptance checklist (what failed before, must never regress)
+From your complaint: Stations saving failed; Sessions/Users/Settings tabs were empty placeholders.
+WATTSCEVSAASUI
+
+Definition of Done for each tab
+
+Has working API endpoints (CRUD) UI lists real DB data Create/edit/delete works
+Loading + error states exist
+E2E test exists (Playwright/Cypress)
+
+
+B) The "Industrial Build Prompt" (paste into any coding agent)
+Use the prompt below exactly. It is designed to force the agent to build the system one integratable component at a time, with tests, and with the UI matching your mockups.
+Tip: When using multiple tools/agents, you reuse the same prompt but you change only the "STOP AFTER STEP X" line.
+
+
+? MASTER PROMPT: WATTSC Industrial EV CPMS SaaS (Hostinger + CitrineOS)
+ROLE
+You are a principal engineer + product engineer building an industrial-grade EV CPMS SaaS for WATTSC. You must follow professional software engineering protocols: incremental delivery, integration-first design, tests, and no placeholder "Coming soon" screens in core modules.
+HARD CONSTRAINTS (must obey)
+
+1. Hosting target for product layer: Hostinger Cloud Startup ? Node.js app + MariaDB only. No Django/Python.
+2. Multi-tenant SaaS (organizations/tenants). Strict tenant isolation at the API layer.
+3. CitrineOS (OCPP 2.0.1 CSMS) runs as a separate service (not hosted on Hostinger Cloud Startup). Product layer integrates via REST + webhooks.
+4. Build ONE COMPONENT AT A TIME, and each component must be fully working and integratable before moving on.
+5. Every API endpoint must have validation, authZ, and tests. Every UI screen must be wired to real endpoints.
+6. Must implement the Settings sub-tabs: General, Pricing, Notifications, Integrations, OCPP/CitrineOS, Webhooks (each with Save Changes).
+7. Must implement Stations CRUD such that "Add Station" saves successfully and stations list + map updates immediately.
+
+8. Must implement Sessions list with real data (not empty placeholder), Users management (real CRUD), and Settings (real persistence).
+9. Implement payments: Stripe real checkout if keys exist; CMI = hosted-form redirect scaffold + local dev simulator; store state machine.
+10. Implement driver flows: station locator, filter, map, itinerary placeholder, reservation with time slots, guest QR flow.
+11. Start charging gate: only start if connector is "ready/plug detected" AND (payment authorized OR subscription active OR operator override). Operator + driver popups required.
+12. Code must be TypeScript end-to-end (web + api + shared types).
+13. Provide architecture docs: folder layout, modules/classes, DB schema, API contract, and how components connect.
+
+
+TECH STACK (fixed)
+Monorepo (pnpm or yarn workspaces)
+apps/web : Next.js (TypeScript) + Tailwind + component library (shadcn-style ok)
+apps/api : Node.js + Express (TypeScript), OpenAPI spec
+packages/shared : shared TS types + validation schemas (zod)
+DB: MariaDB using Prisma (preferred) or TypeORM (choose one and commit) Auth: JWT (access + refresh optional)
+Realtime: WebSocket server inside API (or separate apps/realtime ) + event channel Maps: OpenStreetMap tiles with Leaflet (react-leaflet)
+Payments: Stripe SDK; CMI redirect scaffold + signature verification placeholder CI: lint + unit tests; E2E tests for core screens (Playwright)
+
+
+UI MUST MATCH THESE MOCKUPS (describe visually)
+Backoffice shell:
+Left sidebar with WATTSC branding, user card "WATTSC Admin", nav: Dashboard, Stations, Sessions, Users, Settings, Sign out.
+Settings page:
+Horizontal tabs: General, Pricing, Notifications, Integrations, OCPP/CitrineOS, Webhooks. Each tab has form fields and toggles and a Save Changes button.
+Integrations tab:
+Stripe card: enable toggle, Stripe public key field, note that secret key stored server-side. CMI Morocco card: enable toggle, Merchant ID field.
+Pricing tab:
+Default price per kWh (MAD), peak hour start/end, peak multiplier, dynamic pricing toggle, Save Changes.
+Users page:
+KPI counters and user cards with edit/delete and Add User. Sessions page:
+KPI tiles: total sessions, active now, completed, revenue (MAD), kWh delivered; search + filter dropdown; sessions table and Export.
+
+
+DATA MODEL (minimum required tables)
+Implement in MariaDB with migrations:
+organizations, users, user_org_memberships, roles sites, stations, evses, connectors
+amenities, station_amenities
+
+payment_methods, station_payment_methods
+tariffs, tariff_components, tax_rules, peak_pricing_windows, dynamic_pricing_rules_v1 reservations (with conflict prevention)
+charge_sessions, session_events payment_intents, payment_transactions, refunds plans, subscriptions
+platform_settings (global) and org_settings (tenant) webhooks_outbound + webhook_deliveries audit_logs
+
+
+API REQUIREMENTS (must exist)
+Auth:
+POST /auth/register POST /auth/login
+POST /auth/refresh Users:
+CRUD + roles + invite operator/cpo_admin Stations:
+CRUD stations + nested EVSE/connectors GET /stations/search?lat&lng&radius&filters... GET /stations/:id
+Sessions:
+GET /sessions (filterable)
+POST /sessions/start (enforces gating rules) POST /sessions/:id/stop
+Payments:
+POST /payments/stripe/create-checkout POST /payments/cmi/create (redirect url)
+POST /payments/cmi/callback (simulated + signature placeholder) Settings:
+GET/PUT /settings/general GET/PUT /settings/pricing GET/PUT /settings/notifications GET/PUT /settings/integrations GET/PUT /settings/ocpp
+GET/PUT /settings/webhooks CitrineOS integration scaffold:
+POST /integrations/citrineos/remote-start (stub now, real later) POST /integrations/citrineos/remote-stop (stub now, real later)
+POST /integrations/citrineos/webhook (accept events + update connector/session status)
+
+
+QUALITY GATES (must pass before moving to next step)
+For every step:
+Unit tests for business logic
+API contract documented (OpenAPI)
+UI wired to real endpoints (no mocked data) E2E test proves create + list works
+Provide "Run locally" instructions + env template
+
+
+
+
+STEP-BY-STEP DELIVERY PLAN (DO NOT SKIP)
+STEP 1 - Repo foundation (STOP AFTER STEP 1)
+Deliver:
+monorepo scaffolding
+Next.js web shell with sidebar + routing to Dashboard/Stations/Sessions/Users/Settings Express API with health route
+Prisma schema + migration + DB connection Shared types package
+Auth skeleton (JWT middleware stub) README with commands
+STEP 2 - Auth + RBAC (STOP AFTER STEP 2)
+Deliver:
+register/login, JWT auth
+roles and tenant membership protected routes
+seed admin user
+
+STEP 3 - Settings module (STOP AFTER STEP 3)
+Deliver:
+DB tables for platform/org settings
+working API endpoints for each Settings tab
+web UI forms exactly matching tabs (General/Pricing/Notifications/Integrations/OCPP/Webhooks)
+Save Changes persists and reloads tests + e2e test for saving settings
+STEP 4 - Stations module (STOP AFTER STEP 4)
+Deliver:
+full Stations CRUD + nested EVSE/connectors + amenities/payment methods Add Station modal/page saves successfully
+Stations list updates immediately
+Map view shows markers (Leaflet + OSM)
+e2e test: create station ? appears in list and map
+
+STEP 5 - Sessions module + realtime (STOP AFTER STEP 5)
+Deliver:
+charge_sessions table + status events sessions list UI with KPI tiles + filters + export
+realtime updates via websocket (stub emitter ok) no placeholder text
+STEP 6 - Payments + gating start (STOP AFTER STEP 6)
+Deliver:
+Stripe checkout working if keys exist
+CMI redirect scaffold + dev simulator callback payment state machine persisted
+start charging gating enforced
+operator override flow (popup events to operator UI)
+
+STEP 7 - Reservations + QR guest flow (STOP AFTER STEP 7)
+Deliver:
+
+time-slot reservation
+guest QR page and flow (no account) conflict prevention and operator visibility
+STEP 8 - CitrineOS integration scaffold (STOP AFTER STEP 8)
+Deliver:
+connector status sync endpoint
+remote start/stop stubs with clear TODO + env vars webhook receiver for CitrineOS events
+mapping table and admin settings
+
+STEP 9 - OCPI + Plug&Charge scaffolds + dynamic pricing v1 (STOP AFTER STEP 9)
+Deliver:
+OCPI module skeleton + DB + endpoint stubs Plug&Charge feature-flag scaffold
+dynamic pricing engine v1 integrated into quote + session snapshot
+
+STEP 10 - Mobile apps (STOP AFTER STEP 10)
+Deliver:
+React Native app connected to same API
+Driver flows: locator, station detail, reservation, pay, start/stop, session view QR guest scan entry point
+
+
+IMPORTANT: STOP RULE
+STOP AFTER STEP X (I will set X per run).
+Do NOT continue to the next step until the current step passes all Quality Gates.
+
+
+OUTPUT FORMAT REQUIRED
+For the current step, output:
+1. folder structure
+2. key files added/changed (with code)
+3. migrations/schema
+4. API routes list
+5. how to run locally
+6. tests included and how to run them
+7. any TODOs (only allowed if explicitly accepted by the step)
+
+
+C) What I need from you (to avoid another "tabs not working" iteration)
+You don't need to answer now, but these are the only things that materially change implementation: Do you want React Native (Expo) or Flutter for mobile?
+Do you want a single shared login for driver + operator + backoffice, or separate portals (same API)?
+If you don't specify, the safe default is React Native (Expo) + one API + role-based UI.
+
+
+If you want, paste the MASTER PROMPT into your builder and set STOP AFTER STEP 3 first (Settings module). That's the fastest way to guarantee those Settings tabs work exactly like your screenshots and persist correctly.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
